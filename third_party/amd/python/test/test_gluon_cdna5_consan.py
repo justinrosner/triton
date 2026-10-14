@@ -302,7 +302,6 @@ def test_ws_load_ordering(FAILURE):
             f"Unexpected ConSan violation in stderr:\n{stderr_str}"
 
 
-@pytest.mark.skip(reason="mbarrier arrivals from partitions whose warp count differs from num_warps are rejected")
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
 @pytest.mark.parametrize("MISSING_BAR", ["none", "1", "2"])
 def test_ws_different_warp_sizes(MISSING_BAR):

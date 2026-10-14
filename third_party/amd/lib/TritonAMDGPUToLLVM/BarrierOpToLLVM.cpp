@@ -1,6 +1,5 @@
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "PatternTritonGPUOpToLLVM.h"
-#include "Utility.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
@@ -15,9 +14,6 @@ constexpr int kBarrierCountBitWidth = 29;
 // - 1);
 constexpr int kBarrierPhaseMask = 1;
 constexpr int kInitCountPos = 32;
-// The Init Count field is bits [47:32]; each phase reloads the pending count
-// from it, so the hardware count (init count - 1) must fit in 16 bits.
-constexpr int64_t kMaxBarrierInitCount = 1 << 16;
 
 namespace {
 
@@ -30,14 +26,6 @@ struct InitBarrierOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    // `count` is in block-level arrivals; each one is S hardware arrivals,
-    // one per warp.
-    int scale = LLVM::AMD::getMbarrierArrivalScale(op);
-    int64_t initCount = int64_t(op.getCount()) * scale;
-    if (initCount > kMaxBarrierInitCount)
-      return op.emitError() << "mbarrier count " << op.getCount() << " times "
-                            << scale << " warps exceeds the hardware limit of "
-                            << kMaxBarrierInitCount << " arrivals";
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getAlloc(),
         typeConverter->convertType(op.getAlloc().getType().getElementType()),
@@ -55,7 +43,7 @@ struct InitBarrierOpConversion
     // Phase changes when underflow is detected (pending count becomes
     // negative). The provided count from the user assumes that phase changes
     // when pending count reaches zero, so make the adjustment here.
-    Value count = b.i64_val(initCount - 1);
+    Value count = b.i64_val(op.getCount() - 1);
     Value val = b.or_(b.shl(count, b.i64_val(kInitCountPos)), count);
     b.store(val, smemObj.getBase());
     LLVM::BrOp::create(rewriter, loc, ValueRange(), endBlock);
@@ -76,27 +64,18 @@ struct ArriveBarrierOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     TritonLLVMOpBuilder b(loc, rewriter);
-    if (failed(LLVM::AMD::verifyMbarrierArrivalWarpCount(op)))
-      return failure();
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getAlloc(),
         typeConverter->convertType(op.getAlloc().getType().getElementType()),
         rewriter);
     auto count = adaptor.getCount();
-    // The DS arrive decrements once per active lane, so one lane per warp
-    // supplies that warp's share of `count` block-level arrivals.
     // NOTE: The LLVM intrisic expects an i64_ty for count (update value)
     // But count cannot be more than 32bits according to ISA docs.
-    Value priorState = LLVM::AMD::emitOnLaneZero(rewriter, loc, i64_ty, [&] {
-      return ROCDL::DsAtomicBarrierArriveRtnOp::create(
-          rewriter, loc, i64_ty, smemObj.getBase(), b.i64_val(count), {}, {},
-          {});
-    });
+    Value priorState = ROCDL::DsAtomicBarrierArriveRtnOp::create(
+        rewriter, loc, i64_ty, smemObj.getBase(), b.i64_val(count), {}, {}, {});
     Value priorPhase = b.and_(
         i32_ty, b.i32_val(kBarrierPhaseMask),
         b.trunc(i32_ty, b.lshr(priorState, b.i64_val(kBarrierCountBitWidth))));
-    priorPhase =
-        ROCDL::ReadfirstlaneOp::create(rewriter, loc, {i32_ty}, priorPhase);
     rewriter.replaceOp(op, priorPhase);
     return success();
   }

@@ -75,7 +75,7 @@ def shared_to_global(pointer, smem, mask=None, cache_modifier="", _semantic=None
 @builtin
 def mbarrier_arrive(mbarrier, _semantic=None):
     """
-    Arrive on the mbarrier once all outstanding async loads are complete.
+    Arrive on the mbarrier once all outstanding async copies are complete.
 
     Args:
         mbarrier (shared_memory_descriptor): Barrier object to arrive on.

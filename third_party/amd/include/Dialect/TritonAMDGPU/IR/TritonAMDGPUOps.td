@@ -1289,11 +1289,7 @@ def InitBarrierOp : TT_AMDGPU_Op<"init_barrier", [
   let description = [{
       Initializes a shared memory allocation with mbarrier information.
       `alloc` is a descriptor to the shared memory allocation. `count` is the
-      number of block-level arrivals per phase: a TDM op with this barrier and
-      `async_copy_mbarrier_arrive` each count as one, and `arrive_barrier`
-      counts as its `count`. The lowering scales `count` by `ttg.num-warps`,
-      so every region that arrives on the barrier must have `ttg.num-warps`
-      warps.
+      number of arrives expected by the barrier.
   }];
 
   let arguments = (ins

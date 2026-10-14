@@ -554,34 +554,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // -----
 
-// A partitioned copy that lowers to two TDM instructions per warp: only the
-// last one carries the mbarrier.
-#shared_inner = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
-#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 4, partitionDim = 0, partitionLayout = #shared_inner}>
-#bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: tdm_load_partitioned_multi_instr_barrier
-  tt.func public @tdm_load_partitioned_multi_instr_barrier(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %bar: !ttg.memdesc<1xi64, #bar, #smem, mutable>) {
-    %c_shape = arith.constant 256 : i32
-    %c_stride0 = arith.constant 256 : i64
-    %c_stride1 = arith.constant 1 : i64
-    %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape], [%c_stride0, %c_stride1] : <f16>, <128x16xf16, #partitioned>
-    %1 = ttg.local_alloc : () -> !ttg.memdesc<128x16xf16, #partitioned, #smem, mutable>
-    // CHECK-DAG: %[[BAR_EN:.*]] = llvm.mlir.constant(262144 : i32) : i32
-    // CHECK-NOT: llvm.or %{{.*}}, %[[BAR_EN]] : i32
-    // CHECK: "llvm.amdgcn.tensor.load.to.lds"
-    // CHECK: llvm.or %{{.*}}, %[[BAR_EN]] : i32
-    // CHECK: "llvm.amdgcn.tensor.load.to.lds"
-    // CHECK-NOT: "llvm.amdgcn.tensor.load.to.lds"
-    // CHECK: llvm.return
-    %2 = amdg.async_tdm_copy_global_to_local %0 into %1, barrier = %bar : !tt.tensordesc<128x16xf16, #partitioned>, !ttg.memdesc<1xi64, #bar, #smem, mutable> -> !ttg.memdesc<128x16xf16, #partitioned, #smem, mutable>
-    tt.return
-  }
-}
-
-// -----
-
 // Multi-chunk gather with an mbarrier. Warps 1..3 hold redundant indices:
 // chunk 0 gives them a NULL descriptor and no barrier, while the last chunk
 // keeps the user's pred, turns them into NOPs, and carries the barrier.

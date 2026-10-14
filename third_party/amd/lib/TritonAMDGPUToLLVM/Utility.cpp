@@ -1318,48 +1318,4 @@ SmallVector<Value> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
   return results;
 }
 
-int getMbarrierArrivalScale(Operation *op) {
-  return triton::gpu::lookupNumWarps(op->getParentOfType<ModuleOp>());
-}
-
-LogicalResult verifyMbarrierArrivalWarpCount(Operation *op) {
-  int scale = getMbarrierArrivalScale(op);
-  int numWarps = triton::gpu::lookupNumWarps(op);
-  if (numWarps == scale)
-    return success();
-  return op->emitError() << "mbarrier arrivals require every arriving region "
-                            "to have ttg.num-warps ("
-                         << scale << ") warps, but this region has "
-                         << numWarps;
-}
-
-Value emitOnLaneZero(RewriterBase &rewriter, Location loc, Type resultTy,
-                     function_ref<Value()> emitBody) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value isLaneZero = b.icmp_eq(getLaneId(rewriter, loc), b.i32_val(0));
-  SmallVector<Value, 1> otherLanes;
-  if (resultTy)
-    otherLanes.push_back(LLVM::ZeroOp::create(rewriter, loc, resultTy));
-
-  Block *curBlock = rewriter.getInsertionBlock();
-  Block *endBlock = curBlock->splitBlock(rewriter.getInsertionPoint());
-  if (resultTy)
-    endBlock->addArgument(resultTy, loc);
-  Block *laneZeroBlock = rewriter.createBlock(
-      curBlock->getParent(), std::next(Region::iterator(curBlock)));
-  rewriter.setInsertionPointToEnd(curBlock);
-  LLVM::CondBrOp::create(rewriter, loc, isLaneZero, laneZeroBlock, ValueRange{},
-                         endBlock, otherLanes);
-
-  rewriter.setInsertionPointToStart(laneZeroBlock);
-  Value result = emitBody();
-  SmallVector<Value, 1> laneZero;
-  if (resultTy)
-    laneZero.push_back(result);
-  LLVM::BrOp::create(rewriter, loc, laneZero, endBlock);
-
-  rewriter.setInsertionPointToStart(endBlock);
-  return resultTy ? endBlock->getArgument(0) : Value();
-}
-
 } // namespace mlir::LLVM::AMD

@@ -901,6 +901,8 @@ def gemm_tdm_warp_specialized_kernel(a_ptr, b_ptr, c_ptr,  #
     ttgl.static_assert(NUM_BUFFERS >= 2, "NUM_BUFFERS must be at least 2")
 
     PRODUCER_WARPS: ttgl.constexpr = NUM_WARPS // 2
+    CONSUMER_WARPS: ttgl.constexpr = NUM_WARPS // 2
+    WARP_SIZE: ttgl.constexpr = 32
 
     WMMA_LAYOUT: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, True, WARP_BASES, [], [16, 16, 32])
     shared_layouts: ttgl.constexpr = create_shared_layouts(BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B)
@@ -926,10 +928,10 @@ def gemm_tdm_warp_specialized_kernel(a_ptr, b_ptr, c_ptr,  #
     # empty_bars: signals when consumer is done with buffers
     # ready_bars: signals when producer has filled buffers
     for i in ttgl.static_range(NUM_BUFFERS):
-        # empty_bars: one mbarrier.arrive from the consumer partition per phase
-        ttgl.amd.cdna5.mbarrier.init(empty_bars.index(i), count=1)
-        # ready_bars: one TDM load from the producer partition per phase
-        ttgl.amd.cdna5.mbarrier.init(ready_bars.index(i), count=1)
+        # empty_bars: arrive on barrier once per thread, so use consumer thread count
+        ttgl.amd.cdna5.mbarrier.init(empty_bars.index(i), count=CONSUMER_WARPS * WARP_SIZE)
+        # ready_bars: TDM arrives on barrier once per warp, so use producer warp count
+        ttgl.amd.cdna5.mbarrier.init(ready_bars.index(i), count=PRODUCER_WARPS)
 
     args = PartitionArgs(a_desc, b_desc, a_buffer, b_buffer, empty_bars, ready_bars, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B,
                          WMMA_LAYOUT, c_ptr.type.element_ty)
@@ -1427,6 +1429,8 @@ def persistent_gemm_tdm_warp_specialized_kernel(a_ptr, b_ptr, c_ptr,  #
 
     # WS kernels require num_warps to be a multiple of 4; default partition (epilogue) must have multiple of 4 warps.
     PRODUCER_WARPS: ttgl.constexpr = 4
+    EPILOGUE_WARPS: ttgl.constexpr = 4
+    WARP_SIZE: ttgl.constexpr = 32
 
     # accumulator buffers used for double-buffering to overlap epilogue with load of the next tile
     NUM_ACC_BUFFERS: ttgl.constexpr = 2
@@ -1466,15 +1470,17 @@ def persistent_gemm_tdm_warp_specialized_kernel(a_ptr, b_ptr, c_ptr,  #
     # load_ready_bars: signals when producer partition has filled the shared memory buffer for matrices A and B
     # acc_empty_bars: signals when epilogue partition has stored the accumulator provided by the compute partition
     # acc_ready_bars: signals when compute partition has filled the accuumulator to be consumed by the epilogue partition
-    # Every barrier gets one block-level arrival per phase: an mbarrier.arrive from the compute partition, or the
-    # mbarrier-carrying TDM load (producer) or store (epilogue).
     for i in ttgl.static_range(NUM_BUFFERS):
-        ttgl.amd.cdna5.mbarrier.init(load_empty_bars.index(i), count=1)
-        ttgl.amd.cdna5.mbarrier.init(load_ready_bars.index(i), count=1)
+        # load_empty_bars: arrive on barrier once per thread, so use compute thread count
+        ttgl.amd.cdna5.mbarrier.init(load_empty_bars.index(i), count=COMPUTE_WARPS * WARP_SIZE)
+        # load_ready_bars: TDM arrives on barrier once per warp, so use producer warp count
+        ttgl.amd.cdna5.mbarrier.init(load_ready_bars.index(i), count=PRODUCER_WARPS)
 
     for i in ttgl.static_range(NUM_ACC_BUFFERS):
-        ttgl.amd.cdna5.mbarrier.init(acc_empty_bars.index(i), count=1)
-        ttgl.amd.cdna5.mbarrier.init(acc_ready_bars.index(i), count=1)
+        # acc_empty_bars: TDM arrives on barrier once per warp, so use epilogue warp count
+        ttgl.amd.cdna5.mbarrier.init(acc_empty_bars.index(i), count=EPILOGUE_WARPS)
+        # acc_ready_bars: arrive on barrier once per thread, so use compute thread count
+        ttgl.amd.cdna5.mbarrier.init(acc_ready_bars.index(i), count=COMPUTE_WARPS * WARP_SIZE)
 
     args = PersistentPartitionArgs(a_desc, b_desc, c_desc, a_buffer, b_buffer, acc_buffer, load_empty_bars,
                                    load_ready_bars, acc_empty_bars, acc_ready_bars, BLOCK_K, NUM_BUFFERS,
@@ -1510,6 +1516,8 @@ def persistent_gemm_tdm_warp_specialized_subtiled_kernel(a_ptr, b_ptr, c_ptr,  #
 
     # WS kernels require num_warps to be a multiple of 4; default partition (epilogue) must have multiple of 4 warps.
     PRODUCER_WARPS: ttgl.constexpr = 4
+    EPILOGUE_WARPS: ttgl.constexpr = 4
+    WARP_SIZE: ttgl.constexpr = 32
 
     # accumulator buffers used for double-buffering to overlap epilogue with load of the next tile
     NUM_ACC_BUFFERS: ttgl.constexpr = 2
@@ -1561,15 +1569,17 @@ def persistent_gemm_tdm_warp_specialized_subtiled_kernel(a_ptr, b_ptr, c_ptr,  #
     # load_ready_bars: signals when producer partition has filled the shared memory buffer for matrices A and B
     # acc_empty_bars: signals when epilogue partition has stored the accumulator provided by the compute partition
     # acc_ready_bars: signals when compute partition has filled the accuumulator to be consumed by the epilogue partition
-    # Every barrier gets one block-level arrival per phase: an mbarrier.arrive from the compute partition, or the
-    # mbarrier-carrying TDM load (producer) or store (epilogue).
     for i in ttgl.static_range(NUM_BUFFERS):
-        ttgl.amd.cdna5.mbarrier.init(load_empty_bars.index(i), count=1)
-        ttgl.amd.cdna5.mbarrier.init(load_ready_bars.index(i), count=1)
+        # load_empty_bars: arrive on barrier once per thread, so use compute thread count
+        ttgl.amd.cdna5.mbarrier.init(load_empty_bars.index(i), count=COMPUTE_WARPS * WARP_SIZE)
+        # load_ready_bars: TDM arrives on barrier once per warp, so use producer warp count
+        ttgl.amd.cdna5.mbarrier.init(load_ready_bars.index(i), count=PRODUCER_WARPS)
 
     for i in ttgl.static_range(NUM_ACC_BUFFERS):
-        ttgl.amd.cdna5.mbarrier.init(acc_empty_bars.index(i), count=1)
-        ttgl.amd.cdna5.mbarrier.init(acc_ready_bars.index(i), count=1)
+        # acc_empty_bars: TDM arrives on barrier once per warp, so use epilogue warp count
+        ttgl.amd.cdna5.mbarrier.init(acc_empty_bars.index(i), count=EPILOGUE_WARPS)
+        # acc_ready_bars: arrive on barrier once per thread, so use compute thread count
+        ttgl.amd.cdna5.mbarrier.init(acc_ready_bars.index(i), count=COMPUTE_WARPS * WARP_SIZE)
 
     args = PersistentPartitionSubtiledArgs(a_desc, b_desc, c_desc, a_buffer, b_buffer, acc_buffer, load_empty_bars,
                                            load_ready_bars, acc_empty_bars, acc_ready_bars, BLOCK_K, NUM_BUFFERS,

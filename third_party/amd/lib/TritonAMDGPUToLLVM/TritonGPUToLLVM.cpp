@@ -60,14 +60,6 @@ public:
     addIllegalDialect<mlir::gpu::GPUDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
     addIllegalOp<triton::amdgpu::BufferLoadToLocalOp>();
-    // The mbarrier count and warp-count checks in these lowerings must fail the
-    // conversion instead of leaving the op behind.
-    addIllegalOp<triton::amdgpu::InitBarrierOp, triton::amdgpu::ArriveBarrierOp,
-                 triton::amdgpu::AsyncCopyMbarrierArriveOp,
-                 triton::amdgpu::AsyncTDMCopyGlobalToLocalOp,
-                 triton::amdgpu::AsyncTDMCopyLocalToGlobalOp,
-                 triton::amdgpu::AsyncTDMGatherOp,
-                 triton::amdgpu::AsyncTDMScatterOp>();
     // Warp specialization is lowered later.
     addLegalOp<triton::gpu::WarpSpecializeOp>();
     addLegalOp<triton::gpu::WarpYieldOp>();

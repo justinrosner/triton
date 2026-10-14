@@ -882,27 +882,3 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
-
-// -----
-
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  tt.func @init_barrier_count_too_large(%alloc: !ttg.memdesc<1xi64, #shared, #smem, mutable>) {
-    // expected-error @below {{count must be at most 65536}}
-    amdg.init_barrier %alloc, 65537 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
-    tt.return
-  }
-}
-
-// -----
-
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  tt.func @arrive_barrier_count_too_large(%alloc: !ttg.memdesc<1xi64, #shared, #smem, mutable>) {
-    // expected-error @below {{count must be at most 65536}}
-    %0 = amdg.arrive_barrier %alloc, 65537 : !ttg.memdesc<1xi64, #shared, #smem, mutable> -> i32
-    tt.return
-  }
-}

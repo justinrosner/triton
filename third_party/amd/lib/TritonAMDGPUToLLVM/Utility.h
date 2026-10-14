@@ -147,21 +147,6 @@ SmallVector<Value> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
                                     bool toFp16, Value packedVec,
                                     mlir::triton::amdgpu::ISAFamily isaFamily);
 
-// mbarrier counts are block-level: `init_barrier` scales its count by the
-// arrival scale (the module's `ttg.num-warps`), and every arrival source makes
-// each warp contribute an equal share of one block-level unit.
-int getMbarrierArrivalScale(Operation *op);
-
-// Emits an error on `op` and fails if it arrives on an mbarrier from a region
-// whose warp count differs from the arrival scale.
-LogicalResult verifyMbarrierArrivalWarpCount(Operation *op);
-
-// Emits the code built by `emitBody` so that only lane 0 of each warp runs it.
-// When `resultTy` is set, `emitBody` returns a value of that type; the result
-// holds it on lane 0 and zero on the other lanes.
-Value emitOnLaneZero(RewriterBase &rewriter, Location loc, Type resultTy,
-                     function_ref<Value()> emitBody);
-
 } // namespace mlir::LLVM::AMD
 
 #endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_UTILITY_H_
