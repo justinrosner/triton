@@ -1646,10 +1646,16 @@ LogicalResult UpdateTensorDescriptorOp::verify() {
   return success();
 }
 
+// The LDS barrier's Init Count field is 16 bits and holds the count minus 1.
+// The lowering also checks the count scaled by the number of warps.
+constexpr int64_t kMaxBarrierCount = 1 << 16;
+
 // -- InitBarrierOp --
 LogicalResult InitBarrierOp::verify() {
   if (getCount() < 1)
     return emitOpError("count must be greater than or equal to 1");
+  if (getCount() > kMaxBarrierCount)
+    return emitOpError("count must be at most ") << kMaxBarrierCount;
   return success();
 }
 
@@ -1662,6 +1668,10 @@ TypedValue<gpu::MemDescType> WaitBarrierOp::getBarrier() { return getAlloc(); }
 LogicalResult ArriveBarrierOp::verify() {
   if (getCount() < 1)
     return emitOpError("count must be greater than or equal to 1");
+  // A larger count always exceeds the pending count, and the hardware drops
+  // the excess without reporting it.
+  if (getCount() > kMaxBarrierCount)
+    return emitOpError("count must be at most ") << kMaxBarrierCount;
   return success();
 }
 

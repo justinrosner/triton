@@ -424,7 +424,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_init_barrier_state
     // CHECK: tti.experimental_lock_acquire
     // CHECK: tt.call @__triton_consan_track_visible_accesses
-    // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
+    // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state{{[^(]*}}(%{{[^,]*}}, %{{[^,]*}}, %c1_i32{{[_0-9]*}}, %c0_i64
     // CHECK: tti.experimental_assert_uniform {{.*}}, "Barrier used before initialization or after invalidation"
     // CHECK: tti.experimental_assert_uniform {{.*}}, "Barrier arrive underflow: current count or tx-count would become invalid"
     // CHECK-NOT: tt.call @__triton_consan_update_barrier_state
@@ -493,14 +493,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.shar
     %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tt.call @__triton_consan_invalidate_barrier_storage
-    amdg.init_barrier %bar, 8 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    amdg.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tt.call @__triton_consan_init_barrier_state
     // CHECK: tt.call @__triton_consan_verify_write_visibility
     // CHECK: tt.call @__triton_consan_verify_read_visibility
     // CHECK: tt.call @__triton_consan_publish_write_visibility
     // CHECK: tt.call @__triton_consan_set_read_visibility
     // CHECK: tt.call @__triton_consan_track_visible_accesses
-    // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
+    // The TDM copy is one block-level arrival, independent of num-warps.
+    // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state{{[^(]*}}(%{{[^,]*}}, %{{[^,]*}}, %c1_i32{{[_0-9]*}}, %c0_i64
     // CHECK: tti.experimental_assert_uniform {{.*}}, "Barrier used before initialization or after invalidation"
     // CHECK: tti.experimental_assert_uniform {{.*}}, "Barrier arrive underflow: current count or tx-count would become invalid"
     // CHECK-NOT: tt.call @__triton_consan_update_barrier_state
@@ -527,7 +528,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.shar
     %b_smem = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tt.call @__triton_consan_invalidate_barrier_storage
-    amdg.init_barrier %bar, 16 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    amdg.init_barrier %bar, 2 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
 
     // CHECK: tt.call @__triton_consan_init_barrier_state
     // First TDM copy: full effects + barrier instrumentation
@@ -642,12 +643,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.shar
     %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tt.call @__triton_consan_invalidate_barrier_storage
-    amdg.init_barrier %bar, 8 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    amdg.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tt.call @__triton_consan_init_barrier_state
     // CHECK: tt.call @__triton_consan_verify_write_visibility
     // CHECK: tt.call @__triton_consan_set_read_visibility
     // CHECK: tt.call @__triton_consan_track_visible_accesses
-    // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
+    // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state{{[^(]*}}(%{{[^,]*}}, %{{[^,]*}}, %c1_i32{{[_0-9]*}}, %c0_i64
     // CHECK: tti.experimental_assert_uniform {{.*}}, "Barrier used before initialization or after invalidation"
     // CHECK: tti.experimental_assert_uniform {{.*}}, "Barrier arrive underflow: current count or tx-count would become invalid"
     // CHECK-NOT: tt.call @__triton_consan_update_barrier_state
@@ -1349,15 +1350,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   tt.func public @tdm_gather_scatter_track_barrier(%desc: !tt.tensordesc<64x128xf16>, %rows: tensor<64xi32, #ttg.slice<{dim = 0, parent = #idx_parent}>>) {
     %buffer = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<256x128xf16, #shared, #smem, mutable>
     %barrier = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
-    amdg.init_barrier %barrier, 8 : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
-    // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
+    amdg.init_barrier %barrier, 2 : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+    // Gather and scatter are one block-level arrival each, however many TDM
+    // instructions they lower to.
+    // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state{{[^(]*}}(%{{[^,]*}}, %{{[^,]*}}, %c1_i32{{[_0-9]*}}, %c0_i64
     // CHECK: tti.experimental_assert_uniform {{.*}}, "Barrier used before initialization or after invalidation"
     // CHECK: tti.experimental_assert_uniform {{.*}}, "Barrier arrive underflow: current count or tx-count would become invalid"
     // CHECK-NOT: tt.call @__triton_consan_update_barrier_state
     // CHECK-NOT: tt.call @__triton_consan_commit_accesses
     // CHECK: amdg.async_tdm_gather
     %gather = amdg.async_tdm_gather %desc[%rows] to %buffer, barrier = %barrier : tensor<64xi32, #ttg.slice<{dim = 0, parent = #idx_parent}>>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable>, !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
-    // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
+    // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state{{[^(]*}}(%{{[^,]*}}, %{{[^,]*}}, %c1_i32{{[_0-9]*}}, %c0_i64
     // CHECK: tti.experimental_assert_uniform {{.*}}, "Barrier used before initialization or after invalidation"
     // CHECK: tti.experimental_assert_uniform {{.*}}, "Barrier arrive underflow: current count or tx-count would become invalid"
     // CHECK-NOT: tt.call @__triton_consan_update_barrier_state
@@ -1381,7 +1384,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
       %value: tensor<128xi32, #amd_convert_src>) {
     %barrier = ttg.local_alloc {allocation.offset = 0 : i32}
         : () -> !ttg.memdesc<1xi64, #amd_convert_barrier, #ttg.shared_memory, mutable>
-    amdg.init_barrier %barrier, 128
+    amdg.init_barrier %barrier, 1
         : !ttg.memdesc<1xi64, #amd_convert_barrier, #ttg.shared_memory, mutable>
     %phase = amdg.arrive_barrier %barrier, 1
         : !ttg.memdesc<1xi64, #amd_convert_barrier, #ttg.shared_memory, mutable> -> i32

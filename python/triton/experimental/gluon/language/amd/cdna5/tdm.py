@@ -263,10 +263,15 @@ def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tenso
             pointer used to position the descriptor before the load.
         dest (shared_memory_descriptor): the shared memory destination to store the loaded data.
         pred (bool, optional): if given, predicate to enable or disable the load.
-        mbarrier (shared_memory_descriptor, optional): The barrier object to signal "arrive" on.
+        mbarrier (shared_memory_descriptor, optional): The barrier object to
+            arrive on once the load completes. The load counts as one arrival
+            (see :func:`mbarrier.init`), or none if the predicate is false.
+            Completing the phase also means that every earlier TDM op from
+            this program has completed.
         warp_used_hint (int, optional): Bitmask selecting the active warp
             subset for descriptor layout (bit ``n`` => warp ``n``).  Doesn't
-            affect the data in ``dest``, only the work split.
+            affect the data in ``dest`` or the ``mbarrier`` arrival count, only
+            the work split.
             The number of active warps must be a power of two, and the active
             warps must follow a regular bit pattern for efficient lowering.
             Examples: ``0b00001111`` (warps 0..3), ``0b11110000`` (warps
@@ -363,7 +368,11 @@ def async_store(dest: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.ten
         offsets (List[int], optional): if given, the offsets from the base
             pointer used to position the descriptor before the store.
         src (shared_memory_descriptor): the shared memory source to load the data.
-        mbarrier (shared_memory_descriptor, optional): The barrier object to signal "arrive" on.
+        mbarrier (shared_memory_descriptor, optional): The barrier object to
+            arrive on once the store completes. The store counts as one arrival
+            (see :func:`mbarrier.init`). Which effects of the store that
+            completion covers has not been validated on hardware yet; use
+            :func:`async_wait` before reusing ``src`` or reading the result.
     """
     assert src is not None, "async_store requires a src shared_memory_descriptor"
     if offsets:
@@ -410,7 +419,9 @@ def async_scatter(desc: tensor_descriptor, dst_row_indices: ttgl.tensor, src: sh
             through :func:`update_tensor_descriptor` for the column.
         dst_row_indices (tensor): 1D tensor of row indices (int16 or int32) in the destination tensor.
         src (shared_memory_descriptor): the shared memory source containing data to scatter. Must be 2D.
-        mbarrier (shared_memory_descriptor, optional): The barrier object to signal "arrive" on.
+        mbarrier (shared_memory_descriptor, optional): The barrier object to
+            arrive on. The scatter counts as one arrival (see
+            :func:`mbarrier.init`) however many TDM instructions it needs.
     """
     ndim = len(desc.block_shape)
     assert ndim == 2, f"TDM scatter only supports 2D tensors, got {ndim}D"
@@ -449,7 +460,10 @@ def async_gather(desc: tensor_descriptor, src_row_indices: ttgl.tensor, dst: sha
             through :func:`update_tensor_descriptor` for the column and predicate.
         src_row_indices (tensor): 1D tensor of row indices (int16 or int32) in the source tensor.
         dst (shared_memory_descriptor): the shared memory destination to store gathered data. Must be 2D.
-        mbarrier (shared_memory_descriptor, optional): The barrier object to signal "arrive" on.
+        mbarrier (shared_memory_descriptor, optional): The barrier object to
+            arrive on once the gather completes. The gather counts as one
+            arrival (see :func:`mbarrier.init`) however many TDM instructions
+            it needs, or none if the predicate is false.
     """
     ndim = len(desc.block_shape)
     assert ndim == 2, f"TDM gather only supports 2D tensors, got {ndim}D"

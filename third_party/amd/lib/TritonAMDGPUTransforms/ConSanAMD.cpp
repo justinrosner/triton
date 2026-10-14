@@ -115,8 +115,12 @@ public:
       if (auto barrierOp = dyn_cast<ttg::MBarrierOpInterface>(op))
         barrier = barrierOp.getBarrier();
       if (barrier) {
+        // mbarrier counts are block-level: a TDM op with a barrier is one
+        // arrival, however many warps the lowering keeps active.
+        // TODO: pass the descriptor's pred so a predicated-off op doesn't
+        // count.
         info.trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
-        info.barriers.push_back({barrier, nullptr, ttg::lookupNumWarps(op)});
+        info.barriers.push_back({barrier, nullptr, /*count=*/1});
       } else {
         info.trackingKind = MemEffectsOpInfo::TrackingKind::CommitCount;
         info.commitKind =
@@ -125,18 +129,12 @@ public:
       }
       return info;
     }
-    // AMD ArriveBarrierOp: Explicit barrier arrival.
-    // Arrive is per-THREAD when called explicitly (unlike TDM which
-    // is per-warp). Scale by total threads in the partition so ConSan's shadow
-    // barrier state matches the hardware arrival count.
+    // AMD ArriveBarrierOp: explicit block-level arrival of `count` units.
     if (auto arriveOp = dyn_cast<ttag::ArriveBarrierOp>(op)) {
       MemEffectsOpInfo info;
       info.trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
-      int numWarps = ttg::lookupNumWarps(arriveOp);
-      auto mod = arriveOp->getParentOfType<ModuleOp>();
-      int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
-      int totalCount = (int)arriveOp.getCount() * numWarps * threadsPerWarp;
-      info.barriers.push_back({arriveOp.getBarrier(), nullptr, totalCount});
+      info.barriers.push_back(
+          {arriveOp.getBarrier(), nullptr, (int)arriveOp.getCount()});
       return info;
     }
 

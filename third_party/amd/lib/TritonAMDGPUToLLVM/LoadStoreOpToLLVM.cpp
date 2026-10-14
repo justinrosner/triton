@@ -1304,6 +1304,9 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
+    if (op.getBarrier() &&
+        failed(mlir::LLVM::AMD::verifyMbarrierArrivalWarpCount(op)))
+      return failure();
 
     auto tensorDescTy = op.getDesc().getType();
     auto encoding = tensorDescTy.getSharedLayout();
@@ -1462,6 +1465,9 @@ struct AsyncTDMCopyLocalToGlobalOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
+    if (op.getBarrier() &&
+        failed(mlir::LLVM::AMD::verifyMbarrierArrivalWarpCount(op)))
+      return failure();
 
     auto tensorDescTy = op.getDesc().getType();
     auto smemTy = op.getSrc().getType();
@@ -1545,6 +1551,9 @@ struct AsyncTDMScatterOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
+    if (op.getBarrier() &&
+        failed(mlir::LLVM::AMD::verifyMbarrierArrivalWarpCount(op)))
+      return failure();
 
     // Multi-CTA not supported for scatter
     if (lookupNumCTAs(op) > 1) {
@@ -1640,6 +1649,9 @@ struct AsyncTDMGatherOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
+    if (op.getBarrier() &&
+        failed(mlir::LLVM::AMD::verifyMbarrierArrivalWarpCount(op)))
+      return failure();
 
     auto tensorDescTy = op.getDesc().getType();
     auto smemTy = op.getDst().getType();
@@ -2521,14 +2533,20 @@ struct AsyncCopyMbarrierArriveOpConversion
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    TritonLLVMOpBuilder b(loc, rewriter);
+    if (failed(mlir::LLVM::AMD::verifyMbarrierArrivalWarpCount(op)))
+      return failure();
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getBarrier(),
         typeConverter->convertType(op.getBarrier().getType().getElementType()),
         rewriter);
-    auto newOp = ROCDL::DsAtomicAsyncBarrierArriveOp::create(rewriter, loc, {},
-                                                             smemObj.getBase());
-    rewriter.replaceOp(op, newOp);
+    // The async arrive decrements once per active lane, so one lane per warp
+    // supplies that warp's share of the block-level arrival.
+    mlir::LLVM::AMD::emitOnLaneZero(rewriter, loc, /*resultTy=*/Type(), [&] {
+      ROCDL::DsAtomicAsyncBarrierArriveOp::create(rewriter, loc, {},
+                                                  smemObj.getBase());
+      return Value();
+    });
+    rewriter.eraseOp(op);
     return success();
   }
 };
