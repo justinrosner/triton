@@ -880,21 +880,16 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
     The descriptor must be positioned beforehand by amdg.update_tensor_descriptor
     (global offset, bounds, pred); this op applies only the per-warp distribution
     and inherits `pred` from the descriptor.
-
-    The operation can also take an optional mbarrier (`barrier`). The copy then
-    counts as one block-level arrival on it once the copy completes (see
-    `init_barrier`), or as none if the descriptor's `pred` is 0. When a phase
-    completes, every TDM op that the same region issued before the arriving op
-    has also completed. Arrivals from `arrive_barrier` or
-    `async_copy_mbarrier_arrive` don't give that guarantee.
+    The operation can also take an optional 64bit LDS barrier address, in which case
+    it sends an "LDS atomic arrive" to signal its completion.
 
     `warp_used_hint` is an optional i32 bitmask performance hint for
     partial TDM copy: bit `n` (LSB = warp 0) means warp `n` carries a
     real descriptor; bits above `num_warps - 1` must be zero. Same data
     lands in shared memory either way: `K = popcount(hint)` active warps
     cover the block, while inactive warps still issue the TDM instruction
-    with a null descriptor, or with a NOP descriptor that still arrives
-    when an mbarrier is attached.
+    with a null descriptor, or a NOP descriptor that still arrives when an
+    mbarrier is attached.
 
     For "all warps participate", omit the attribute (preferred) or pass
     a full bitmask `K = num_warps`; an explicit `warp_used_hint = 0` is
@@ -997,12 +992,8 @@ def AsyncTDMCopyLocalToGlobalOp : TT_AMDGPU_Op<"async_tdm_copy_local_to_global",
 
     The descriptor must be positioned beforehand by
     amdg.update_tensor_descriptor; this op applies only the per-warp distribution.
-
-    The operation can also take an optional mbarrier (`barrier`). The copy then
-    counts as one block-level arrival on it once the TDM op completes (see
-    `init_barrier`), or as none if the descriptor's `pred` is 0. Which effects
-    of a store that completion covers (reads of `src`, global writes) has not
-    been validated on hardware yet.
+    The operation can also take an optional 64bit LDS barrier address, in which case
+    it sends an "LDS atomic arrive" to signal its completion.
   }];
 
   let arguments = (ins
@@ -1046,10 +1037,6 @@ def AsyncTDMScatterOp : TT_AMDGPU_Op<"async_tdm_scatter", [
     The descriptor must be positioned beforehand by amdg.update_tensor_descriptor
     (global offset / column via add_offsets, bounds); this op only supplies the
     per-instruction row slices (dst_row_indices) and the LDS source.
-
-    With an optional mbarrier (`barrier`), the scatter counts as one
-    block-level arrival on it (see `init_barrier`), sent by its last TDM
-    instruction, or as none if the descriptor's `pred` is 0.
   }];
 
   let arguments = (ins
@@ -1094,10 +1081,6 @@ def AsyncTDMGatherOp : TT_AMDGPU_Op<"async_tdm_gather", [
     (global offset / column via add_offsets, bounds, pred); this op only supplies the
     per-instruction row slices (src_row_indices) and the LDS destination, and inherits
     `pred` from the descriptor.
-
-    With an optional mbarrier (`barrier`), the gather counts as one
-    block-level arrival on it (see `init_barrier`), sent by its last TDM
-    instruction once the gather completes, or as none if `pred` is 0.
   }];
 
   let arguments = (ins
@@ -1306,17 +1289,11 @@ def InitBarrierOp : TT_AMDGPU_Op<"init_barrier", [
   let description = [{
       Initializes a shared memory allocation with mbarrier information.
       `alloc` is a descriptor to the shared memory allocation. `count` is the
-      number of block-level arrivals that complete a phase, at most 65536.
-      Each of these contributes one unit, however it is lowered:
-      - a TDM copy, gather, or scatter with this barrier (none if its `pred`
-        is 0);
-      - `arrive_barrier` with count `c` contributes `c`;
-      - `async_copy_mbarrier_arrive`.
-
-      The lowering multiplies `count` by `ttg.num-warps`, and each arrival
-      source makes every warp contribute an equal share, so `count` times
-      `ttg.num-warps` must also be at most 65536. Every region that arrives on
-      the barrier must currently have `ttg.num-warps` warps.
+      number of block-level arrivals per phase: a TDM op with this barrier and
+      `async_copy_mbarrier_arrive` each count as one, and `arrive_barrier`
+      counts as its `count`. The lowering scales `count` by `ttg.num-warps`,
+      so every region that arrives on the barrier must have `ttg.num-warps`
+      warps.
   }];
 
   let arguments = (ins
@@ -1337,9 +1314,7 @@ def WaitBarrierOp : TT_AMDGPU_Op<"wait_barrier", [
 
   let description = [{
     Blocks the program progress until the mbarrier object in `alloc` completes
-    its current phase, i.e. until the parity of the barrier's phase differs
-    from `phase`. The hardware phase is a 3-bit counter; only its parity is
-    compared, so `phase` must be 0 or 1.
+    its current phase.
   }];
 
   let arguments = (ins
@@ -1360,11 +1335,9 @@ def ArriveBarrierOp : TT_AMDGPU_Op<"arrive_barrier", [
   let summary = "perform the arrive operation on an mbarrier";
   let description = [{
     Performs the "arrive" operation on an mbarrier object in shared memory. The operation requires a `count` attribute
-    between 1 and 65536, and contributes `count` block-level arrivals to the mbarrier's pending count (see
-    `init_barrier`). If the pending count reaches zero, the phase changes (is decremented in a wraparound manner) and
-    the pending count is reloaded with the init count value. Arrivals beyond the pending count are dropped, not carried
-    into the next phase. Returns the phase parity (0 for even, 1 for odd) of the mbarrier object prior to the "arrive"
-    operation.
+    of at least 1, and decreases the pending arrival count of the mbarrier by the specific count. If the pending count reaches
+    zero, the phase changes (is decremented in a wraparound manner) and the pending count is reloaded with the init count value. Returns the phase
+    parity (0 for even, 1 for odd) of the mbarrier object prior to the "arrive" operation.
 
     Example:
 
@@ -1393,12 +1366,10 @@ def ArriveBarrierOp : TT_AMDGPU_Op<"arrive_barrier", [
 
 def AsyncCopyMbarrierArriveOp : TT_AMDGPU_Op<"async_copy_mbarrier_arrive", [
     DeclareOpInterfaceMethods<MBarrierOpInterface>]> {
-  let summary = "arrive on mbarrier once all previously issued async loads are completed";
+  let summary = "arrive on mbarrier once all previously issued copies are completed";
   let description = [{
-    Performs the "async arrive" operation: contributes one block-level arrival (see `init_barrier`) once all previously
-    issued async loads to LDS have completed. It does not wait for async stores (`async_copy_local_to_global`), and is
-    not known to wait for TDM ops.
-    The instruction itself is asynchronous; it returns immediately.
+    Performs the "async arrive" operation by decrementing pending account by 1 when all previous async load to LDS (particularly, not TDM) have completed.
+    The instruction itself is asynchronous; it returns immediately. Decrements the barrier pending count. The update value for decrementing is fixed at 1.
     If the pending count becomes zero, the phase changes (is decremented in a wraparound manner) and the pending count is reloaded with the init count value.
   }];
   let arguments = (ins
